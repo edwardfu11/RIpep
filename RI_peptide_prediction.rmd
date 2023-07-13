@@ -1,0 +1,52 @@
+---
+title: "RI_peptide_prediction.rmd"
+author: "Xiaoyong Fu"
+date: "2023-07-13"
+output: html_document
+---
+## R Markdown
+
+```{r}
+library(Biostrings)
+library(GenomicRanges)
+library(plyranges)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(biomaRt)
+```
+```{r}
+## retrieve DNA sequences for retained introns in a GRanges object
+Views(hg38, LU99_IR_DEG_GR) %>% as_granges() %>% sort() -> IR_DEG_UP.gr
+
+## retrieve retained intron upstream exon 15 nt sequences, and get gene list from the GRanges object 
+mcols(IR_DEG_UP.gr, level="within")[,"dna"] -> mcols(IR_DEG_UP.gr, level="within")[,"ir.dna"]
+IR_DEG_UP.gr <- IR_DEG_UP.gr[, c("Gene", "ir.dna")]
+flank(IR_DEG_UP.gr, 15) %>% Views(hg38, .) %>% as_granges() -> IR_DEG_UP.gr_1
+IR_DEG_UP.gr_1 %>% as.data.frame(.) %>% .[, "Gene"] %>% unique() -> IR.genes
+
+## retrieve gene coding sequences from biomaRt
+g.coding.lt <- list()
+for (i in 1:length(IR.genes)) {
+  cds_seq <- getSequence(id=IR.genes[i], type="hgnc_symbol", seqType = "coding", mart=mart)
+  cds_seq %>% filter(grepl("^ATG", coding)) %>% mutate(size=nchar(coding)) %>% arrange(desc(size)) %>% .[1,"coding"] -> g.coding
+  g.coding.lt[i] <- g.coding
+  names(g.coding.lt)[i] <- IR.genes[i]
+  
+## find retained intron translated peptide sequences reading in frame from prior exon
+as.character() -> pep
+for (i in 1:length(IR_DEG_UP.gr_1)) {
+IR_DEG_UP.gr_1 %>% .$dna %>% .[i] -> exon.1
+  if(is.na(g.coding.lt[[as.data.frame(IR_DEG_UP.gr_1)[i, "Gene"]]])) {
+    pep_1 = ""
+    append(pep, pep_1) -> pep}else{
+matchPattern(exon.1, g.coding.lt[[as.data.frame(IR_DEG_UP.gr_1)[i, "Gene"]]]) %>% as.data.frame() %>% .$end -> end.id
+if(length(end.id)==0){
+  pep_1 = ""
+  append(pep, pep_1) -> pep}else{
+IR_DEG_UP.gr_1 %>% .$ir.dna %>% .[i] %>% paste(substr(g.coding.lt[[as.data.frame(IR_DEG_UP.gr_1)[i, "Gene"]]], 1, end.id), ., sep = "") %>% DNAString() %>% translate() %>% as.character() -> exon.intron.p
+DNAString(substr(g.coding.lt[[as.data.frame(IR_DEG_UP.gr_1)[i, "Gene"]]], 1, end.id)) %>% translate() %>% as.character() -> exon.p
+stringr::str_remove(exon.intron.p, exon.p) %>% trimws(., "right", whitespace = "\\*.*") -> pep_1
+append(pep, pep_1) -> pep
+  }}}
+IR_DEG_UP.gr_1$IR.pep <- pep
+IR_DEG_UP.gr_1 %>% unique() -> IR_DEG_UP.gr_1
+```
